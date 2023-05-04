@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<!-- TODO USE BOOTSTRAP OR SOMETHING FOR STYLING -->
+<html>
+    <head>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.3/jquery.min.js"></script> <!-- JQuery -->
+    <link rel="stylesheet" href="style.css" type="text/css">
+    </head>
+    <body>
+	
+	<div id="header">
+		
+		<div id="search">
+			<h1>Search all Ebay Postings</h1>
+			<form id="start-form" onsubmit="submitForm(event)">
+				<label id="search-label">
+					Enter item:
+					<input id="search-input" type="text" name="inputString" required>
+				</label>
+				<button type="submit">Search</button>
+				<button onClick="clearPins()" style="display:none">Clear Pins</button>
+				<button id="pause-button" onClick="pauseUpdates()" style="display:none">Pause</button>
+			</form>
+			
+		  <br>
+		 </div>
+		 
+	</div>
+	
+	<div id="map-container">
+		<div id="map-key">
+			<h3>Key by Price</h3>
+			<span class="key"> Loading <img src="http://labs.google.com/ridefinder/images/mm_20_white.png"></img></span>
+			<span class="key"> Low <img src="http://maps.google.com/mapfiles/ms/icons/green-dot.png"></img></span>
+			<span class="key"> Mid <img src="http://maps.google.com/mapfiles/ms/icons/yellow-dot.png"></img></span>
+			<span class="key"> High <img src="http://maps.google.com/mapfiles/ms/icons/red-dot.png"></img></span>
+			<span class="key"> High High <img src="http://maps.google.com/mapfiles/ms/icons/dollar.png"></img></span>
+		</div>
+		<div id="map"></div>
+	</div>
+	
+        <!--JS goes here-->
+        <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBCvhnrxylCh53y2oopThVv5Srl7MFAhwo&callback=initMap"></script>
+		<script>
+		
+		let global_map;
+		let markersArray = [];
+		
+	   function submitForm(event) {
+            event.preventDefault();
+            const formData = new FormData(event.target);
+            const inputString = formData.get('inputString');
+            fetch('server.php', {
+                method: 'POST',
+                body: formData
+            }).then(() => startUpdates(inputString));
+        }
+		
+		let eventSource;
+		let isPaused = false;
+
+
+		const searchLabel = document.getElementById('search-label');
+		const searchButton = document.querySelector('#start-form button[type="submit"]');
+		const clearPinsButton = document.querySelector('#start-form button[onClick="clearPins()"]');
+		const pauseButton = document.getElementById('pause-button');
+		const searchInput = document.getElementById('search-input');
+		
+		function startUpdates(inputString) {
+			searchLabel.textContent = 'Scraping...';
+			searchButton.style.display = 'none';
+			clearPinsButton.style.display = 'none';
+			pauseButton.style.display = 'inline-block';
+			searchInput.style.display = 'none';
+
+			eventSource = new EventSource('event_server.php');
+
+			eventSource.onmessage = function (event) {
+				if (isPaused) return;
+				
+				const messageContainer = document.getElementById('messages');
+				if (event.data === "stop") {
+					eventSource.close();
+					searchLabel.textContent = 'Scraping completed';
+					searchButton.style.display = 'inline-block';
+					clearPinsButton.style.display = 'inline-block';
+					pauseButton.style.display = 'none';
+				} else {
+					dropMarkers(JSON.parse(event.data));
+				}
+			};
+
+			eventSource.onerror = function (event) {
+				console.error('Error occurred:', event);
+			};
+		}
+
+		function pauseUpdates() {
+			isPaused = !isPaused;
+			const pauseButton = document.getElementById('pause-button');
+			clearPinsButton.style.display = 'inline-block';
+			pauseButton.textContent = isPaused ? 'Resume' : 'Pause';
+		}
+		
+		function colorAllPins(){
+			const sortedItems = markersArray.sort((a, b) => {
+			  return parseInt(a.price.replace(/\D+/g, ''), 10) - parseInt(b.price.replace(/\D+/g, ''),10);
+			});
+			
+			for(let i = 0; i < sortedItems.length; i++){
+				if(i < sortedItems.length/3) sortedItems[i].pin.setIcon('http://maps.google.com/mapfiles/ms/icons/green-dot.png');
+				else if((i > sortedItems.length/3) && (i < (sortedItems.length/3)*2)) sortedItems[i].pin.setIcon('http://maps.google.com/mapfiles/ms/icons/yellow-dot.png');
+				else if(i  > (sortedItems.length/3)*2) sortedItems[i].pin.setIcon('http://maps.google.com/mapfiles/ms/icons/red-dot.png');
+			}
+		}
+		
+		let numPins = 0;
+		async function dropMarkers(data){
+			var coords = await adrsToCrds(data.location);
+			addMarker(coords, data.price, data.title, data.url, "http://labs.google.com/ridefinder/images/mm_20_white.png", numPins, data.img_url);
+			colorAllPins();
+			numPins++;
+		}
+		
+		function adrsToCrds(address){
+			var geocoder = new google.maps.Geocoder();
+			
+			return new Promise(function(resolve, reject) {
+				geocoder.geocode( { 'address': address}, function(results, status) {
+					if (status == google.maps.GeocoderStatus.OK) {
+						var lati = results[0].geometry.location.lat();
+						var lon = results[0].geometry.location.lng();
+						resolve({lat: lati, lng: lon});
+					} else {
+						reject("Geocode was not successful for the following reason: " + status);
+					}
+				}); 
+			});
+		}
+		
+		var userLocation;
+		async function getCurrentLocation() {
+			return new Promise((resolve, reject) => {
+				if (navigator.geolocation) {
+					navigator.geolocation.getCurrentPosition(
+						function (position) {
+							let lat = position.coords.latitude;
+							let lng = position.coords.longitude;
+							
+							if(userLocation == null){
+								userLocation = { lat: lat, lng: lng };
+								addMarker(userLocation, 100, "placeholder", "placeholder", 'http://maps.google.com/mapfiles/ms/micons/man.png', 99, );
+							}
+							resolve(userLocation);
+						},
+						function (error) {
+							console.error("Error occurred while getting user location: ", error);
+							reject(error);
+						}
+					);
+				} else {
+					console.error("Geolocation is not supported by this browser.");
+					reject("Geolocation not supported");
+				}
+			});
+		}
+			
+		function clearPins() {
+			searchLabel.style.display = 'inline-block';
+			searchLabel.textContent = 'Enter item:';
+			searchButton.style.display = 'inline-block';	
+			clearPinsButton.style.display = 'none';
+			pauseButton.style.display = 'none';
+			searchInput.style.display = 'inline-block';
+			
+			for (var i = 0; i < markersArray.length; i++ ) {
+				if(markersArray[i].pinned == false) markersArray[i].pin.setMap(null);
+			}
+			markersArray.length = 0;
+		}
+		
+		var directionsService;
+        var directionsRenderer;
+		
+		async function getDirections(userLoc) {
+			directionsRenderer.setDirections({routes: []});
+
+            var waypts = [];
+
+            for (var i = 0; i < markersArray.length; i++) {
+                if (markersArray[i].pinned) {
+					waypts.push({
+						location: markersArray[i].pin.position,
+						stopover: true
+					});
+				}
+            }
+
+            var request = {
+                origin: userLoc,
+                destination: userLoc,
+                waypoints: waypts,
+                optimizeWaypoints: true,
+                travelMode: 'DRIVING'
+            };
+
+            directionsService.route(request, function(result, status) {
+                if (status == 'OK') {
+					directionsRenderer.setOptions({ suppressMarkers: true });
+                    directionsRenderer.setDirections(result);
+                }
+            });
+        }
+		
+		function initMap() {
+			global_map = new google.maps.Map(
+				document.getElementById('map'), {zoom: 4, center: {lat: 41.36444, lng: -98.31665}}
+			);
+			
+			directionsService = new google.maps.DirectionsService();
+            directionsRenderer = new google.maps.DirectionsRenderer();
+            directionsRenderer.setMap(global_map);
+			
+		}	
+		
+		function showPins(){
+			let content = `<img onClick="setPin('http://maps.google.com/mapfiles/ms/icons/red-pushpin.png')" id="red-pin" class="pin-option" src="http://maps.google.com/mapfiles/ms/icons/red-pushpin.png"></img>
+				<img onClick="setPin('http://maps.google.com/mapfiles/ms/icons/ylw-pushpin.png')" id="yellow-pin" class="pin-option" src="http://maps.google.com/mapfiles/ms/icons/ylw-pushpin.png"></img>
+				<img onClick="setPin('http://maps.google.com/mapfiles/ms/icons/grn-pushpin.png')" id="green-pin" class="pin-option" src="http://maps.google.com/mapfiles/ms/icons/grn-pushpin.png"></img>
+				<img onClick="setPin('http://maps.google.com/mapfiles/ms/icons/ltblu-pushpin.png')"id="ltblu-pin" class="pin-option" src="http://maps.google.com/mapfiles/ms/icons/ltblu-pushpin.png"></img>
+				<img onClick="setPin('http://maps.google.com/mapfiles/ms/icons/blue-pushpin.png')" id="blue-pin" class="pin-option" src="http://maps.google.com/mapfiles/ms/icons/blue-pushpin.png"></img>
+				<img onClick="setPin('http://maps.google.com/mapfiles/ms/icons/purple-pushpin.png')" id="purple-pin" class="pin-option" src="http://maps.google.com/mapfiles/ms/icons/purple-pushpin.png"></img>              
+				<img onClick="setPin('http://maps.google.com/mapfiles/ms/icons/pink-pushpin.png')" id="pink-pin" class="pin-option" src="http://maps.google.com/mapfiles/ms/icons/pink-pushpin.png"></img>`
+			infoWindow.setContent(content);
+		}
+		
+		let infoWindow;
+		let currentId;
+		var unpin = "";
+
+		async function setPin(color) {
+			let userLoc;
+			for (var i = 0; i < markersArray.length; i++) {
+				if (markersArray[i].id == currentId) {
+					if (color == null) {
+						markersArray[i].pin.setIcon(markersArray[i].color);
+						unpin = "";
+						markersArray[i].pinned = false;
+					} else {
+						markersArray[i].pin.setIcon(color);
+						markersArray[i].pinned = true;
+						unpin = "(unpin)";
+					}
+
+					let markerData = markersArray[i];
+					let content = `<h3>${markerData.title}: ${markerData.price}$ <a href=${markerData.url}>view listing<a></h3> \n <img src=${markerData.img_url}> <img onClick="showPins()" id="init-pin" class="pin-option" src="http://maps.google.com/mapfiles/ms/icons/red-pushpin.png"> <a onClick="setPin(${markerData.pinned ? null : '\'' + color + '\''})">${markerData.pinned ? '(unpin)' : ''}</a>`;
+					infoWindow.setContent(content);
+				}
+			}
+			// Call getDirections after the pin status has been updated
+			try {
+				userLoc = await getCurrentLocation();
+				getDirections(userLoc);
+			} catch (error) {
+				console.error("Error getting current location: ", error);
+			}
+		}
+		
+		function getRandomOffset(min, max) {
+			return Math.random() * (max - min) + min;
+		}
+		
+		function addMarker(coords, price, title, url, color, num, img_url) {
+			const minOffset = 0.05555; // You can adjust these values to change the range of the random offset
+			const maxOffset = 0.99115;
+
+			// Create a google.maps.LatLng object from the input coordinates
+			let newCoords = new google.maps.LatLng(coords.lat, coords.lng);
+
+			// Check if there's already a marker with the same coordinates and adjust the new coordinates if necessary
+			let hasDuplicates;
+			do {
+				hasDuplicates = false;
+				for (const existingMarker of markersArray) {
+					if (existingMarker.pin.getPosition().equals(newCoords)) {
+						const latOffset = getRandomOffset(minOffset, maxOffset);
+						const lngOffset = getRandomOffset(minOffset, maxOffset);
+						newCoords = new google.maps.LatLng(newCoords.lat() + latOffset, newCoords.lng() + lngOffset);
+						hasDuplicates = true;
+						break;
+					}
+				}
+			} while (hasDuplicates);
+
+			coords = { lat: newCoords.lat(), lng: newCoords.lng() };
+
+			let marker = new google.maps.Marker({ position: coords, map: global_map, icon: { url: color } });
+			markersArray.push({ pin: marker, id: num, pinned: false, color: color, title: title, price: price, url: url, img_url: img_url });
+
+			let content = `<h3>${title}: ${price}$ <a href=${url}>view listing<a></h3> \n <img src=${img_url}> <img onClick="showPins()" id="init-pin" class="pin-option" src="http://maps.google.com/mapfiles/ms/icons/red-pushpin.png"> <a onClick="setPin()">${unpin}</a>`;
+			infoWindow = new google.maps.InfoWindow({ content: content });
+
+			marker.addListener('click', function () {
+				currentId = num;
+				let markerData = markersArray.find(marker => marker.id === num);
+				let updatedContent = `<h3>${markerData.title}: ${markerData.price}$ </h3> \n <img src=${markerData.img_url}> <a href=${markerData.url}>view listing<a> <img onClick="showPins()" id="init-pin" class="pin-option" src="http://maps.google.com/mapfiles/ms/icons/red-pushpin.png"> <a onClick="setPin()">${markerData.pinned ? '(unpin)' : ''}</a>`;
+				infoWindow.setContent(updatedContent);
+				infoWindow.open(map, marker);
+			});
+		}
+				
+		</script>
+		
+    </body>
+</html>
